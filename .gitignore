@@ -50,3 +50,5 @@ Thumbs.db
 *.mdb
 *.opendb
 *.VC.db
+*.slnx
+mono_crash.*
