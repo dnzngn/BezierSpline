@@ -159,22 +159,19 @@ public class BezierSplineEditor : Editor
     {
         if (spline.controlPoints.Length < 2) return;
 
-        Vector3[] leftCP = spline.GetLeftLaneControlPoints();
-        Vector3[] rightCP = spline.GetRightLaneControlPoints();
-
-        // Sol şerit (yeşil)
-        Handles.color = Color.green;
-        DrawCurve(leftCP);
-
-        // Sağ şerit (mavi)
-        Handles.color = Color.blue;
-        DrawCurve(rightCP);
-
-        // Merkez çizgi (sarı, kesikli)
+        // Merkez çizgi (sarı)
         Handles.color = Color.yellow;
         DrawCurve(spline.controlPoints);
 
-        // Kontrol noktaları arası bağlantı çizgileri (yarı saydam)
+        // Sol şerit (yeşil) - offset kullanarak
+        Handles.color = Color.green;
+        DrawCurveOffset(spline.laneWidth / 2f);
+
+        // Sağ şerit (mavi) - offset kullanarak
+        Handles.color = Color.blue;
+        DrawCurveOffset(-spline.laneWidth / 2f);
+
+        // Kontrol noktaları arası bağlantı çizgileri (yarı saydam, kesikli)
         Handles.color = new Color(1f, 1f, 1f, 0.3f);
         for (int i = 0; i < spline.controlPoints.Length - 1; i++)
         {
@@ -183,7 +180,7 @@ public class BezierSplineEditor : Editor
     }
 
     /// <summary>
-    /// Verilen kontrol noktaları ile Bezier eğrisini çizer.
+    /// Merkez Bezier eğrisini çizer.
     /// </summary>
     private void DrawCurve(Vector3[] cp)
     {
@@ -193,6 +190,23 @@ public class BezierSplineEditor : Editor
         {
             float t = (float)i / spline.curveResolution;
             Vector3 curr = BezierMath.EvaluateCurve(cp, t);
+            Handles.DrawLine(prev, curr);
+            prev = curr;
+        }
+    }
+
+    /// <summary>
+    /// Offset'lenmiş şerit eğrisini çizer.
+    /// Her noktada merkez eğriden normal yönde offset uygular.
+    /// </summary>
+    private void DrawCurveOffset(float offset)
+    {
+        Vector3 prev = BezierMath.GetOffsetPoint(spline.controlPoints, 0f, offset);
+
+        for (int i = 1; i <= spline.curveResolution; i++)
+        {
+            float t = (float)i / spline.curveResolution;
+            Vector3 curr = BezierMath.GetOffsetPoint(spline.controlPoints, t, offset);
             Handles.DrawLine(prev, curr);
             prev = curr;
         }
