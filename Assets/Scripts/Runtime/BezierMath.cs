@@ -1,35 +1,14 @@
 using UnityEngine;
 
 /// <summary>
-/// Bezier eğrisi için saf matematik fonksiyonları.
-/// ÖNEMLİ: Vector3.Lerp KULLANILMAZ! Doğrudan Bernstein polinomları kullanılır.
-/// 
-/// Bezier Eğrisi Nedir?
-/// --------------------
-/// N adet kontrol noktası ile tanımlanan parametrik bir eğridir.
-/// t parametresi 0'dan 1'e gider:
-///   - t=0 → eğrinin başlangıç noktası (ilk kontrol noktası)
-///   - t=1 → eğrinin bitiş noktası (son kontrol noktası)
-///   - t=0.5 → eğrinin "ortası" (ama geometrik orta değil!)
-///
-/// Formül: B(t) = Σ(i=0..n) C(n,i) * (1-t)^(n-i) * t^i * P_i
-/// Burada:
-///   - n = derece (kontrol noktası sayısı - 1)
-///   - C(n,i) = binomial katsayı = n! / (i! * (n-i)!)
-///   - P_i = i'inci kontrol noktası
-///   - t = 0 ile 1 arasında parametre
+/// Pure Bezier curve math utilities using Bernstein polynomials.
+/// No Vector3.Lerp — all calculations use the explicit Bezier formula:
+/// B(t) = Sum(i=0..n) C(n,i) * (1-t)^(n-i) * t^i * P_i
 /// </summary>
 public static class BezierMath
 {
-    // =========================================================================
-    // YARDIMCI MATEMATİK FONKSİYONLARI
-    // =========================================================================
+    // --- Combinatorics ---
 
-    /// <summary>
-    /// Faktöriyel hesaplama: n! = n * (n-1) * (n-2) * ... * 1
-    /// Örnek: 4! = 4 * 3 * 2 * 1 = 24
-    /// Bezier formülündeki binomial katsayı için lazım.
-    /// </summary>
     private static long Factorial(int n)
     {
         long result = 1;
@@ -38,211 +17,109 @@ public static class BezierMath
         return result;
     }
 
-    /// <summary>
-    /// Binomial katsayı: C(n, k) = n! / (k! * (n-k)!)
-    /// "n elemanın k'lı kombinasyonu" - olasılık dersinden hatırlarsın.
-    /// Bezier formülünde her kontrol noktasının ağırlığını belirler.
-    /// 
-    /// Örnek: C(3,1) = 3! / (1! * 2!) = 6 / 2 = 3
-    /// </summary>
+    /// <summary> Binomial coefficient C(n,k) = n! / (k! * (n-k)!) </summary>
     private static long BinomialCoefficient(int n, int k)
     {
         return Factorial(n) / (Factorial(k) * Factorial(n - k));
     }
 
-    /// <summary>
-    /// Bernstein bazis polinomu: B(i, n, t) = C(n,i) * t^i * (1-t)^(n-i)
-    /// 
-    /// Bu fonksiyon, t parametresinde i'inci kontrol noktasının
-    /// ne kadar etkili olduğunu hesaplar.
-    /// 
-    /// Örnek (Kübik Bezier, n=3):
-    ///   - B(0,3,t) = (1-t)^3         → başlangıç noktasının etkisi
-    ///   - B(1,3,t) = 3*t*(1-t)^2     → 1. referans noktasının etkisi
-    ///   - B(2,3,t) = 3*t^2*(1-t)     → 2. referans noktasının etkisi
-    ///   - B(3,3,t) = t^3             → bitiş noktasının etkisi
-    /// </summary>
+    /// <summary> Bernstein basis polynomial: B(i,n,t) = C(n,i) * t^i * (1-t)^(n-i) </summary>
     private static float BernsteinBasis(int i, int n, float t)
     {
         return BinomialCoefficient(n, i) * Mathf.Pow(t, i) * Mathf.Pow(1f - t, n - i);
     }
 
-    // =========================================================================
-    // ANA BEZİER FONKSİYONLARI
-    // =========================================================================
+    // --- Core Bezier Evaluation ---
 
     /// <summary>
-    /// Bezier eğrisi üzerinde t parametresindeki noktayı hesaplar.
-    /// Bu fonksiyon projenin KALBİDİR - her şey buna dayanır.
-    /// 
-    /// Formül: B(t) = Σ(i=0..n) Bernstein(i,n,t) * P_i
-    /// 
-    /// Her kontrol noktasının ağırlıklı ortalamasını alıyoruz.
-    /// Ağırlıklar Bernstein polinomları ile belirleniyor.
-    /// 
-    /// Parametreler:
-    ///   controlPoints: Kontrol noktaları dizisi (en az 2 nokta)
-    ///   t: 0.0 ile 1.0 arasında parametre (eğri üzerindeki konum)
+    /// Evaluates the Bezier curve at parameter t (0..1).
+    /// Supports any degree (N control points = degree N-1).
     /// </summary>
     public static Vector3 EvaluateCurve(Vector3[] controlPoints, float t)
     {
-        // Derece = kontrol noktası sayısı - 1
-        // 4 nokta → 3. derece (kübik), 5 nokta → 4. derece, vs.
         int n = controlPoints.Length - 1;
-
         Vector3 point = Vector3.zero;
 
-        // Her kontrol noktasının katkısını topla
         for (int i = 0; i <= n; i++)
-        {
-            // Bernstein ağırlığı * kontrol noktası pozisyonu
-            float basis = BernsteinBasis(i, n, t);
-            point += basis * controlPoints[i];
-        }
+            point += BernsteinBasis(i, n, t) * controlPoints[i];
 
         return point;
     }
 
     /// <summary>
-    /// Bezier eğrisinin t parametresindeki TEĞET vektörünü (türevini) hesaplar.
-    /// Teğet vektörü, eğrinin o noktadaki yönünü gösterir.
-    /// 
-    /// Türev formülü: B'(t) = n * Σ(i=0..n-1) Bernstein(i,n-1,t) * (P_{i+1} - P_i)
-    /// 
-    /// Yani: bir derece düşük Bezier eğrisi, ama kontrol noktaları olarak
-    /// orijinal noktaların FARKLARINI kullanıyoruz.
-    /// 
-    /// Bu fonksiyon şunlar için lazım:
-    ///   - Eğrinin yönünü bilmek (normal hesaplama için)
-    ///   - Sol/sağ şerit offset'i hesaplamak
+    /// Evaluates the tangent (first derivative) at parameter t.
+    /// B'(t) = n * Sum(i=0..n-1) Bernstein(i,n-1,t) * (P[i+1] - P[i])
     /// </summary>
     public static Vector3 EvaluateTangent(Vector3[] controlPoints, float t)
     {
         int n = controlPoints.Length - 1;
-
-        // Tek nokta varsa türev sıfırdır
         if (n < 1) return Vector3.forward;
 
         Vector3 tangent = Vector3.zero;
-
-        // Türev: n * Σ Bernstein(i, n-1, t) * (P[i+1] - P[i])
         for (int i = 0; i <= n - 1; i++)
         {
-            float basis = BernsteinBasis(i, n - 1, t);
-            // Ardışık kontrol noktalarının farkı
             Vector3 diff = controlPoints[i + 1] - controlPoints[i];
-            tangent += basis * diff;
+            tangent += BernsteinBasis(i, n - 1, t) * diff;
         }
 
-        tangent *= n; // n ile çarp (türev formülünün parçası)
-
-        return tangent;
+        return tangent * n;
     }
 
     /// <summary>
-    /// Eğrinin t noktasındaki NORMAL vektörünü hesaplar.
-    /// Normal = teğete DİK olan vektör.
-    /// 
-    /// Yol/şerit yapıyoruz, yere paralel bir düzlemde çalışıyoruz.
-    /// Bu yüzden "yukarı" vektörü (Vector3.up) ile teğetin çapraz çarpımını alıyoruz.
-    /// 
-    /// Sonuç: teğete dik, yere paralel bir vektör → şerit offset yönü
-    /// 
-    ///   Teğet →  (eğri yönü)
-    ///   Normal ↑  (sola/sağa offset yönü)
-    ///   Up ↑      (yukarı)
+    /// Returns the normal vector perpendicular to the tangent on the XZ plane.
+    /// Used to offset lanes left/right from the center curve.
     /// </summary>
     public static Vector3 GetNormal(Vector3[] controlPoints, float t)
     {
         Vector3 tangent = EvaluateTangent(controlPoints, t).normalized;
-
-        // Çapraz çarpım: tangent × up = sağ/sol yön
-        // Bu bize yere paralel, teğete dik bir vektör verir
         Vector3 normal = Vector3.Cross(tangent, Vector3.up).normalized;
 
-        // Eğer teğet tam yukarı bakıyorsa (dejenere durum), alternatif kullan
+        // Fallback if tangent is parallel to up
         if (normal.sqrMagnitude < 0.001f)
             normal = Vector3.Cross(tangent, Vector3.forward).normalized;
 
         return normal;
     }
 
-    // =========================================================================
-    // ARC-LENGTH PARAMETRİZASYONU
-    // =========================================================================
-    // 
-    // PROBLEM: Bezier eğrisinde t parametresi EŞİT ARALIKLI değildir!
-    // t=0.5 eğrinin geometrik ortası DEĞİLDİR.
-    // Eğri keskin döndüğü yerlerde noktalar sıkışır, düz yerlerde ayrılır.
-    //
-    // ÇÖZÜM: Arc-length parametrizasyonu
-    // Eğriyi çok sayıda küçük parçaya böl, gerçek mesafeleri hesapla,
-    // sonra istenen mesafeye karşılık gelen t değerini bul.
-    // =========================================================================
+    // --- Arc-Length Parameterization ---
+    // Bezier t parameter is NOT uniformly distributed along the curve length.
+    // We build a lookup table to map real distances to t values.
 
-    /// <summary>
-    /// Eğri boyunca kümülatif mesafe tablosu oluşturur.
-    /// 
-    /// Nasıl çalışır:
-    /// 1. Eğriyi 'sampleCount' parçaya böl
-    /// 2. Her parçanın uzunluğunu hesapla
-    /// 3. Kümülatif (toplam) mesafeleri bir dizide sakla
-    /// 
-    /// Dönen dizi: [0, d1, d1+d2, d1+d2+d3, ..., toplamUzunluk]
-    /// İndeks i → t = i / sampleCount parametresine karşılık gelir
-    /// </summary>
+    /// <summary> Builds cumulative arc-length table by sampling the curve. </summary>
     public static float[] BuildArcLengthTable(Vector3[] controlPoints, int sampleCount = 1000)
     {
         float[] table = new float[sampleCount + 1];
-        table[0] = 0f; // Başlangıçta mesafe sıfır
-
-        Vector3 previousPoint = EvaluateCurve(controlPoints, 0f);
+        table[0] = 0f;
+        Vector3 prev = EvaluateCurve(controlPoints, 0f);
 
         for (int i = 1; i <= sampleCount; i++)
         {
-            // t parametresi: 0'dan 1'e doğru ilerle
             float t = (float)i / sampleCount;
-            Vector3 currentPoint = EvaluateCurve(controlPoints, t);
-
-            // Önceki nokta ile şimdiki nokta arasındaki mesafeyi ekle
-            float segmentLength = Vector3.Distance(previousPoint, currentPoint);
-            table[i] = table[i - 1] + segmentLength;
-
-            previousPoint = currentPoint;
+            Vector3 curr = EvaluateCurve(controlPoints, t);
+            table[i] = table[i - 1] + Vector3.Distance(prev, curr);
+            prev = curr;
         }
 
         return table;
     }
 
-    /// <summary>
-    /// Arc-length tablosundan eğrinin toplam uzunluğunu döndürür.
-    /// Tablonun son elemanı = toplam uzunluk.
-    /// </summary>
+    /// <summary> Returns total curve length from the arc-length table. </summary>
     public static float GetTotalLength(float[] arcLengthTable)
     {
         return arcLengthTable[arcLengthTable.Length - 1];
     }
 
-    /// <summary>
-    /// Belirli bir mesafeye karşılık gelen t parametresini bulur.
-    /// Binary search (ikili arama) kullanır - verimli!
-    /// 
-    /// Örnek: Eğri 100 birim uzunsa ve distance=50 istiyorsak,
-    /// eğrinin tam ortasındaki t değerini bulur (ki t=0.5 olmayabilir!)
-    /// </summary>
+    /// <summary> Converts a distance along the curve to the corresponding t parameter using binary search. </summary>
     public static float DistanceToT(float[] arcLengthTable, float distance)
     {
         int sampleCount = arcLengthTable.Length - 1;
         float totalLength = GetTotalLength(arcLengthTable);
 
-        // Sınır kontrolleri
         if (distance <= 0f) return 0f;
         if (distance >= totalLength) return 1f;
 
-        // Binary search: mesafenin tablodaki konumunu bul
-        int low = 0;
-        int high = sampleCount;
-
+        // Binary search
+        int low = 0, high = sampleCount;
         while (low < high)
         {
             int mid = (low + high) / 2;
@@ -252,112 +129,66 @@ public static class BezierMath
                 high = mid;
         }
 
-        // İki örnek arasında lineer interpolasyon (daha hassas sonuç)
+        // Linear interpolation between samples for precision
         if (low > 0)
         {
-            float lengthBefore = arcLengthTable[low - 1];
-            float lengthAfter = arcLengthTable[low];
-            float segmentFraction = (distance - lengthBefore) / (lengthAfter - lengthBefore);
-
-            // t değerini hesapla
+            float before = arcLengthTable[low - 1];
+            float after = arcLengthTable[low];
+            float frac = (distance - before) / (after - before);
             float tBefore = (float)(low - 1) / sampleCount;
             float tAfter = (float)low / sampleCount;
-            return tBefore + segmentFraction * (tAfter - tBefore);
+            return tBefore + frac * (tAfter - tBefore);
         }
 
         return (float)low / sampleCount;
     }
 
-    /// <summary>
-    /// DISTANCE MODE: Belirli mesafe aralıklarıyla eğri üzerinde noktalar üretir.
-    /// 
-    /// Örnek: Eğri 100 birim, distance=10 → 11 nokta (0, 10, 20, ..., 100)
-    /// </summary>
+    /// <summary> Generates evenly spaced points along the curve by distance interval. </summary>
     public static Vector3[] GetPointsByDistance(Vector3[] controlPoints, float distance)
     {
         float[] arcTable = BuildArcLengthTable(controlPoints);
         float totalLength = GetTotalLength(arcTable);
-
-        // Kaç nokta olacak?
         int count = Mathf.FloorToInt(totalLength / distance) + 1;
 
         Vector3[] points = new Vector3[count];
-
         for (int i = 0; i < count; i++)
-        {
-            float d = i * distance;
-            // Mesafeyi t parametresine çevir
-            float t = DistanceToT(arcTable, d);
-            // t'deki noktayı hesapla
-            points[i] = EvaluateCurve(controlPoints, t);
-        }
+            points[i] = EvaluateCurve(controlPoints, DistanceToT(arcTable, i * distance));
 
         return points;
     }
 
-    /// <summary>
-    /// COUNT MODE: Belirli sayıda eşit aralıklı noktalar üretir.
-    /// 
-    /// Örnek: count=5 → 5 nokta, eğri boyunca eşit mesafede dağıtılmış
-    /// </summary>
+    /// <summary> Generates a fixed number of evenly spaced points along the curve. </summary>
     public static Vector3[] GetPointsByCount(Vector3[] controlPoints, int count)
     {
-        if (count < 2) count = 2; // En az 2 nokta (başlangıç + bitiş)
+        if (count < 2) count = 2;
 
         float[] arcTable = BuildArcLengthTable(controlPoints);
-        float totalLength = GetTotalLength(arcTable);
-
-        // Her nokta arası mesafe
-        float spacing = totalLength / (count - 1);
+        float spacing = GetTotalLength(arcTable) / (count - 1);
 
         Vector3[] points = new Vector3[count];
-
         for (int i = 0; i < count; i++)
-        {
-            float d = i * spacing;
-            float t = DistanceToT(arcTable, d);
-            points[i] = EvaluateCurve(controlPoints, t);
-        }
+            points[i] = EvaluateCurve(controlPoints, DistanceToT(arcTable, i * spacing));
 
         return points;
     }
 
-    // =========================================================================
-    // ŞERİT (LANE) OFFSET FONKSİYONLARI
-    // =========================================================================
+    // --- Lane Offset ---
 
-    /// <summary>
-    /// Merkez eğriden belirli bir mesafede offset'lenmiş (kaydırılmış) noktalar üretir.
-    /// Sol şerit için pozitif offset, sağ şerit için negatif offset.
-    /// 
-    /// Bu fonksiyon, merkez Bezier eğrisinden paralel şeritler oluşturmak için kullanılır.
-    /// Her noktada eğrinin normalini hesaplar ve o yönde offset uygular.
-    /// </summary>
+    /// <summary> Returns a point offset from the center curve by 'offset' units along the normal. </summary>
     public static Vector3 GetOffsetPoint(Vector3[] controlPoints, float t, float offset)
     {
-        Vector3 point = EvaluateCurve(controlPoints, t);
-        Vector3 normal = GetNormal(controlPoints, t);
-        return point + normal * offset;
+        return EvaluateCurve(controlPoints, t) + GetNormal(controlPoints, t) * offset;
     }
 
-    /// <summary>
-    /// Offset'lenmiş eğri için kontrol noktalarını yaklaşık olarak hesaplar.
-    /// Her kontrol noktasını normal yönde kaydırır.
-    /// 
-    /// NOT: Bu tam matematiksel offset değil (Bezier offset curve karmaşıktır),
-    /// ama pratik kullanım için yeterli bir yaklaşımdır.
-    /// </summary>
+    /// <summary> Approximates offset control points by shifting each along its normal. </summary>
     public static Vector3[] GetOffsetControlPoints(Vector3[] controlPoints, float offset)
     {
-        Vector3[] offsetPoints = new Vector3[controlPoints.Length];
-
+        Vector3[] result = new Vector3[controlPoints.Length];
         for (int i = 0; i < controlPoints.Length; i++)
         {
             float t = (float)i / (controlPoints.Length - 1);
-            Vector3 normal = GetNormal(controlPoints, t);
-            offsetPoints[i] = controlPoints[i] + normal * offset;
+            result[i] = controlPoints[i] + GetNormal(controlPoints, t) * offset;
         }
-
-        return offsetPoints;
+        return result;
     }
 }
