@@ -2,213 +2,141 @@ using UnityEngine;
 using System.Collections.Generic;
 
 /// <summary>
-/// Bezier Spline ana bileşeni.
-/// Bu script bir GameObject'e eklenir ve Bezier eğrisi verilerini tutar.
-/// 
-/// [ExecuteAlways] → Bu script PLAY MODE'a gerek kalmadan, EDIT MODE'da da çalışır!
-/// Case'in en önemli gereksinimi bu: "Must run in edit mode, not in play mode."
-/// 
-/// Kullanım:
-/// 1. Boş bir GameObject oluştur
-/// 2. Bu scripti ekle
-/// 3. Scene view'da kontrol noktalarını sürükle
-/// 4. Editor Window'dan Distance/Count mode ile node'ları yerleştir
+/// Main Bezier Spline component. Attach to a GameObject to create and edit
+/// a dual-lane Bezier curve in the Scene view.
+/// [ExecuteAlways] ensures this runs in Edit Mode (not just Play Mode).
 /// </summary>
 [ExecuteAlways]
 public class BezierSpline : MonoBehaviour
 {
-    // =========================================================================
-    // AYARLAR (Inspector'da görünecek)
-    // =========================================================================
-
-    [Header("Kontrol Noktaları")]
-    [Tooltip("Bezier eğrisinin kontrol noktaları. İlk ve son = eğrinin uçları, ortadakiler = şekil veren referans noktaları")]
+    [Header("Control Points")]
+    [Tooltip("Bezier control points. First/last are endpoints, middle ones shape the curve.")]
     public Vector3[] controlPoints = new Vector3[]
     {
-        // Varsayılan 4 kontrol noktası (kübik Bezier = 3. derece)
-        // Düz bir S şeklinde başlangıç konfigürasyonu
-        new Vector3(0f, 0f, 0f),      // Başlangıç (kontrol noktası)
-        new Vector3(5f, 0f, 5f),      // 1. referans noktası
-        new Vector3(10f, 0f, -5f),    // 2. referans noktası
-        new Vector3(15f, 0f, 0f)      // Bitiş (kontrol noktası)
+        new Vector3(0f, 0f, 0f),
+        new Vector3(5f, 0f, 5f),
+        new Vector3(10f, 0f, -5f),
+        new Vector3(15f, 0f, 0f)
     };
 
-    [Header("Şerit Ayarları")]
-    [Tooltip("İki şerit arasındaki toplam genişlik (metre cinsinden)")]
+    [Header("Lane Settings")]
     [Range(1f, 20f)]
     public float laneWidth = 4f;
 
-    [Header("Çizim Ayarları")]
-    [Tooltip("Eğri çiziminde kullanılacak nokta sayısı. Yüksek = daha pürüzsüz ama daha yavaş")]
+    [Header("Curve Drawing")]
     [Range(10, 200)]
     public int curveResolution = 50;
 
-    [Header("Node Ayarları")]
-    [Tooltip("Oluşturulan node GameObject'lerinin listesi")]
+    [Header("Generated Objects")]
     public List<GameObject> generatedNodes = new List<GameObject>();
-
-    [Tooltip("Oluşturulan yol mesh'inin GameObject'i")]
     public GameObject roadMeshObject;
 
-    // =========================================================================
-    // ŞERİT (LANE) FONKSİYONLARI
-    // =========================================================================
-
-    /// <summary>
-    /// Sol şerit kontrol noktalarını döndürür.
-    /// Merkez eğriden laneWidth/2 kadar sola (normal yönünde) kaydırılmış.
-    /// </summary>
-    public Vector3[] GetLeftLaneControlPoints()
+    /// <summary> Enforces 2-10 control point limit when edited via Inspector. </summary>
+    private void OnValidate()
     {
-        return BezierMath.GetOffsetControlPoints(controlPoints, laneWidth / 2f);
+        if (controlPoints != null && controlPoints.Length > 10)
+        {
+            System.Array.Resize(ref controlPoints, 10);
+            Debug.LogWarning("BezierSpline: Maximum 10 control points allowed.");
+        }
+        if (controlPoints != null && controlPoints.Length < 2)
+        {
+            System.Array.Resize(ref controlPoints, 2);
+            Debug.LogWarning("BezierSpline: Minimum 2 control points required.");
+        }
     }
 
-    /// <summary>
-    /// Sağ şerit kontrol noktalarını döndürür.
-    /// Merkez eğriden laneWidth/2 kadar sağa (negatif normal yönünde) kaydırılmış.
-    /// </summary>
-    public Vector3[] GetRightLaneControlPoints()
-    {
-        return BezierMath.GetOffsetControlPoints(controlPoints, -laneWidth / 2f);
-    }
+    // --- Lane Point Evaluation ---
 
-    /// <summary>
-    /// Sol şerit üzerindeki t parametresindeki noktayı hesaplar.
-    /// </summary>
     public Vector3 GetLeftLanePoint(float t)
     {
         return BezierMath.GetOffsetPoint(controlPoints, t, laneWidth / 2f);
     }
 
-    /// <summary>
-    /// Sağ şerit üzerindeki t parametresindeki noktayı hesaplar.
-    /// </summary>
     public Vector3 GetRightLanePoint(float t)
     {
         return BezierMath.GetOffsetPoint(controlPoints, t, -laneWidth / 2f);
     }
 
-    // =========================================================================
-    // NODE OLUŞTURMA
-    // =========================================================================
+    // --- Node Creation ---
 
     /// <summary>
-    /// DISTANCE MODE: Belirli mesafe aralıklarıyla her iki şeritte node oluşturur.
-    /// 
-    /// ÖNEMLİ: Mesh için sol ve sağ şeritten EŞİT SAYIDA ve HİZALI nokta lazım.
-    /// Bunu sağlamak için merkez eğrinin arc-length tablosunu kullanıyoruz.
-    /// Aynı t değerlerinden sol ve sağ offset uygulayarak noktalar hep eşleşik kalır.
+    /// Distance Mode: creates nodes at fixed distance intervals along both lanes.
+    /// Uses center curve arc-length for aligned left/right pairs.
     /// </summary>
     public void CreateNodesByDistance(float distance)
     {
-        // Önce eski node'ları temizle
         ClearNodes();
 
-        // Merkez eğrinin arc-length tablosunu oluştur
         float[] arcTable = BezierMath.BuildArcLengthTable(controlPoints);
         float totalLength = BezierMath.GetTotalLength(arcTable);
-
-        // Kaç nokta olacak? (mesafe bazlı)
         int count = Mathf.Max(2, Mathf.FloorToInt(totalLength / distance) + 1);
 
-        // t parametrelerini hesapla (merkez eğri üzerinde eşit mesafeli)
-        float[] tValues = new float[count];
-        for (int i = 0; i < count; i++)
-        {
-            float d = i * distance;
-            tValues[i] = BezierMath.DistanceToT(arcTable, d);
-        }
-
-        // Sol ve sağ şerit noktalarını hesapla (aynı t değerleriyle → hizalı!)
-        Vector3[] leftPoints = new Vector3[count];
-        Vector3[] rightPoints = new Vector3[count];
+        Vector3[] leftPts = new Vector3[count];
+        Vector3[] rightPts = new Vector3[count];
 
         for (int i = 0; i < count; i++)
         {
-            leftPoints[i] = GetLeftLanePoint(tValues[i]);
-            rightPoints[i] = GetRightLanePoint(tValues[i]);
+            float t = BezierMath.DistanceToT(arcTable, i * distance);
+            leftPts[i] = GetLeftLanePoint(t);
+            rightPts[i] = GetRightLanePoint(t);
         }
 
-        // Node GameObject'lerini oluştur
-        CreateNodeGameObjects(leftPoints, "LeftNode");
-        CreateNodeGameObjects(rightPoints, "RightNode");
-
-        // Mesh oluştur (hizalı noktalarla)
-        GenerateRoadMesh(leftPoints, rightPoints);
+        CreateNodeGameObjects(leftPts, "LeftNode");
+        CreateNodeGameObjects(rightPts, "RightNode");
+        GenerateRoadMesh(leftPts, rightPts);
     }
 
     /// <summary>
-    /// COUNT MODE: Belirli sayıda eşit aralıklı node oluşturur.
-    /// Merkez eğri üzerinden t değerleri hesaplanır, sonra sol/sağ offset uygulanır.
+    /// Count Mode: creates a fixed number of evenly spaced nodes along both lanes.
     /// </summary>
     public void CreateNodesByCount(int count)
     {
         if (count < 2) count = 2;
-
         ClearNodes();
 
-        // Merkez eğrinin arc-length tablosunu oluştur
         float[] arcTable = BezierMath.BuildArcLengthTable(controlPoints);
-        float totalLength = BezierMath.GetTotalLength(arcTable);
+        float spacing = BezierMath.GetTotalLength(arcTable) / (count - 1);
 
-        // Eşit aralıklı t değerleri
-        float spacing = totalLength / (count - 1);
-
-        // Sol ve sağ şerit noktaları (hizalı)
-        Vector3[] leftPoints = new Vector3[count];
-        Vector3[] rightPoints = new Vector3[count];
+        Vector3[] leftPts = new Vector3[count];
+        Vector3[] rightPts = new Vector3[count];
 
         for (int i = 0; i < count; i++)
         {
-            float d = i * spacing;
-            float t = BezierMath.DistanceToT(arcTable, d);
-            leftPoints[i] = GetLeftLanePoint(t);
-            rightPoints[i] = GetRightLanePoint(t);
+            float t = BezierMath.DistanceToT(arcTable, i * spacing);
+            leftPts[i] = GetLeftLanePoint(t);
+            rightPts[i] = GetRightLanePoint(t);
         }
 
-        CreateNodeGameObjects(leftPoints, "LeftNode");
-        CreateNodeGameObjects(rightPoints, "RightNode");
-
-        GenerateRoadMesh(leftPoints, rightPoints);
+        CreateNodeGameObjects(leftPts, "LeftNode");
+        CreateNodeGameObjects(rightPts, "RightNode");
+        GenerateRoadMesh(leftPts, rightPts);
     }
 
-    /// <summary>
-    /// Verilen pozisyonlarda küçük küre (sphere) GameObject'leri oluşturur.
-    /// Collider'ı kaldırırız çünkü sadece görsel temsil amaçlı.
-    /// </summary>
+    /// <summary> Creates small sphere GameObjects at given positions. </summary>
     private void CreateNodeGameObjects(Vector3[] positions, string prefix)
     {
         for (int i = 0; i < positions.Length; i++)
         {
-            // Küçük bir küre oluştur
             GameObject node = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             node.name = $"{prefix}_{i}";
             node.transform.position = positions[i];
             node.transform.localScale = Vector3.one * 0.3f;
             node.transform.SetParent(this.transform);
 
-            // Sphere'lerin collider'ını kaldır (gereksiz, performans için)
-            var collider = node.GetComponent<Collider>();
-            if (collider != null) DestroyImmediate(collider);
+            // Remove unnecessary collider from visual-only spheres
+            var col = node.GetComponent<Collider>();
+            if (col != null) DestroyImmediate(col);
 
             generatedNodes.Add(node);
         }
     }
 
-    /// <summary>
-    /// Tüm oluşturulmuş node'ları temizler.
-    /// Yeni node'lar oluşturmadan önce çağrılır.
-    /// 
-    /// DestroyImmediate kullanıyoruz çünkü Edit Mode'dayız.
-    /// Play Mode'da Destroy() kullanılır, Edit Mode'da DestroyImmediate() şart!
-    /// </summary>
+    /// <summary> Clears all generated nodes and the road mesh. Uses DestroyImmediate for Edit Mode. </summary>
     public void ClearNodes()
     {
         foreach (var node in generatedNodes)
-        {
-            if (node != null)
-                DestroyImmediate(node);
-        }
+            if (node != null) DestroyImmediate(node);
         generatedNodes.Clear();
 
         if (roadMeshObject != null)
@@ -218,164 +146,105 @@ public class BezierSpline : MonoBehaviour
         }
     }
 
-    // =========================================================================
-    // MESH OLUŞTURMA
-    // =========================================================================
+    // --- Mesh Generation ---
 
     /// <summary>
-    /// Sol ve sağ şerit arasında yol mesh'i oluşturur.
-    /// 
-    /// Nasıl çalışır:
-    /// 1. Sol ve sağ şeritten eşit sayıda nokta al
-    /// 2. Her nokta çiftinden bir dörtgen (quad) oluştur
-    /// 3. Her dörtgeni 2 üçgene böl (GPU üçgenlerle çalışır)
-    /// 
-    /// Görsel:
-    ///   Sol[0] ---- Sağ[0]
-    ///     |  \        |
-    ///     |   üçgen0  |
-    ///     |        \  |
-    ///   Sol[1] ---- Sağ[1]
-    ///     |  \        |
-    ///     |   üçgen1  |
-    ///     |        \  |
-    ///   Sol[2] ---- Sağ[2]
+    /// Triangulates between aligned left/right lane points to create a road mesh.
+    /// Each consecutive pair of left-right points forms a quad (2 triangles).
+    /// Also adds MeshCollider for physics interaction.
     /// </summary>
-   public void GenerateRoadMesh(Vector3[] leftPoints, Vector3[] rightPoints)
+    public void GenerateRoadMesh(Vector3[] leftPoints, Vector3[] rightPoints)
     {
-        int vertexCount = leftPoints.Length;
+        int vertCount = leftPoints.Length;
+        if (vertCount < 2) return;
 
-        // Güvenlik kontrolü
-        if (vertexCount < 2)
-        {
-            Debug.LogWarning("Mesh oluşturmak için en az 2 nokta çifti gerekli!");
-            return;
-        }
+        if (roadMeshObject != null) DestroyImmediate(roadMeshObject);
 
-        // Eski mesh'i temizle
-        if (roadMeshObject != null)
-            DestroyImmediate(roadMeshObject);
-
-        // Yeni GameObject
         roadMeshObject = new GameObject("RoadMesh");
         roadMeshObject.transform.SetParent(this.transform);
 
         MeshFilter meshFilter = roadMeshObject.AddComponent<MeshFilter>();
         MeshRenderer meshRenderer = roadMeshObject.AddComponent<MeshRenderer>();
 
-        // --- MATERIAL ---
-        // Çift taraflı render (Cull Off) + yeşilimsi yol rengi
-        Material roadMaterial = new Material(Shader.Find("Standard"));
-        roadMaterial.color = new Color(0.4f, 0.6f, 0.4f, 1f);
-        roadMaterial.SetInt("_Cull", (int)UnityEngine.Rendering.CullMode.Off);
-        meshRenderer.sharedMaterial = roadMaterial;
+        // Double-sided material (Cull Off) so mesh is visible from both sides
+        Material mat = new Material(Shader.Find("Standard"));
+        mat.color = new Color(0.4f, 0.6f, 0.4f, 1f);
+        mat.SetInt("_Cull", (int)UnityEngine.Rendering.CullMode.Off);
+        meshRenderer.sharedMaterial = mat;
 
-        // --- MESH VERİLERİ ---
-        Mesh mesh = new Mesh();
-        mesh.name = "RoadMesh";
+        Mesh mesh = new Mesh { name = "RoadMesh" };
 
-        // VERTICES: Her seviyede sol + sağ = 2 nokta
-        Vector3[] vertices = new Vector3[vertexCount * 2];
-        for (int i = 0; i < vertexCount; i++)
+        // Vertices: interleaved left[i], right[i] pairs
+        Vector3[] verts = new Vector3[vertCount * 2];
+        for (int i = 0; i < vertCount; i++)
         {
-            vertices[i * 2] = leftPoints[i];       // Çift index = sol
-            vertices[i * 2 + 1] = rightPoints[i];  // Tek index = sağ
+            verts[i * 2] = leftPoints[i];
+            verts[i * 2 + 1] = rightPoints[i];
         }
 
-        // TRIANGLES: Her quad = 2 üçgen = 6 index
-        int quadCount = vertexCount - 1;
-        int[] triangles = new int[quadCount * 6];
-
+        // Triangles: 2 per quad, counter-clockwise winding for front face
+        int quadCount = vertCount - 1;
+        int[] tris = new int[quadCount * 6];
         for (int i = 0; i < quadCount; i++)
         {
             int idx = i * 6;
-            int bl = i * 2;           // bottom-left  (sol şimdiki)
-            int br = i * 2 + 1;       // bottom-right (sağ şimdiki)
-            int tl = (i + 1) * 2;     // top-left     (sol sonraki)
-            int tr = (i + 1) * 2 + 1; // top-right    (sağ sonraki)
+            int bl = i * 2, br = i * 2 + 1;
+            int tl = (i + 1) * 2, tr = (i + 1) * 2 + 1;
 
-            // Üçgen 1: bl → tl → br (saat yönünün tersine = ön yüz yukarı)
-            triangles[idx + 0] = bl;
-            triangles[idx + 1] = tl;
-            triangles[idx + 2] = br;
-
-            // Üçgen 2: br → tl → tr
-            triangles[idx + 3] = br;
-            triangles[idx + 4] = tl;
-            triangles[idx + 5] = tr;
+            tris[idx] = bl;     tris[idx + 1] = tl;  tris[idx + 2] = br;
+            tris[idx + 3] = br; tris[idx + 4] = tl;  tris[idx + 5] = tr;
         }
 
-        // UV: texture mapping koordinatları
-        Vector2[] uvs = new Vector2[vertexCount * 2];
-        for (int i = 0; i < vertexCount; i++)
+        // UVs: u=0 (left) to u=1 (right), v=0 (start) to v=1 (end)
+        Vector2[] uvs = new Vector2[vertCount * 2];
+        for (int i = 0; i < vertCount; i++)
         {
-            float v = (float)i / (vertexCount - 1);
+            float v = (float)i / (vertCount - 1);
             uvs[i * 2] = new Vector2(0f, v);
             uvs[i * 2 + 1] = new Vector2(1f, v);
         }
 
-        // Mesh'e ata
-        mesh.vertices = vertices;
-        mesh.triangles = triangles;
+        mesh.vertices = verts;
+        mesh.triangles = tris;
         mesh.uv = uvs;
         mesh.RecalculateNormals();
         mesh.RecalculateBounds();
-
         meshFilter.sharedMesh = mesh;
 
-        // MESH COLLIDER: sadece yeterli vertex varsa ekle (hatayı önler)
-        if (vertexCount >= 3)
+        // Add MeshCollider only if we have enough geometry
+        if (vertCount >= 3)
         {
-            MeshCollider meshCollider = roadMeshObject.AddComponent<MeshCollider>();
-            meshCollider.sharedMesh = mesh;
+            MeshCollider mc = roadMeshObject.AddComponent<MeshCollider>();
+            mc.sharedMesh = mesh;
         }
     }
-    // =========================================================================
-    // GIZMO ÇİZİMİ
-    // =========================================================================
 
-    /// <summary>
-    /// Unity Scene view'da eğrileri çizer.
-    /// OnDrawGizmos → Bu GameObject seçili olmasa bile çizer.
-    /// OnDrawGizmosSelected → Sadece seçiliyken çizer.
-    /// 
-    /// Gizmos, Unity'nin debug/görselleştirme sistemidir.
-    /// Sadece Scene view'da görünür, Game view'da ve build'de GÖRÜNMEZ.
-    /// </summary>
+    // --- Gizmo Drawing ---
+
     private void OnDrawGizmos()
     {
         if (controlPoints == null || controlPoints.Length < 2) return;
 
-        // --- MERKEZ EĞRİ (sarı) ---
+        // Center curve (yellow)
         Gizmos.color = Color.yellow;
         DrawBezierGizmo(controlPoints);
 
-        // --- SOL ŞERİT (yeşil) ---
-        // Doğrudan offset point kullanarak çiziyoruz (daha doğru paralel çizgi)
+        // Left lane (green)
         Gizmos.color = Color.green;
-        DrawBezierGizmoOffset(laneWidth / 2f);
+        DrawOffsetGizmo(laneWidth / 2f);
 
-        // --- SAĞ ŞERİT (mavi) ---
+        // Right lane (blue)
         Gizmos.color = Color.blue;
-        DrawBezierGizmoOffset(-laneWidth / 2f);
+        DrawOffsetGizmo(-laneWidth / 2f);
 
-        // --- KONTROL NOKTALARI ---
+        // Control points: red spheres for endpoints, green for reference points
         for (int i = 0; i < controlPoints.Length; i++)
         {
-            // İlk ve son = kontrol noktası (kırmızı, büyük)
-            if (i == 0 || i == controlPoints.Length - 1)
-            {
-                Gizmos.color = Color.red;
-                Gizmos.DrawSphere(controlPoints[i], 0.4f);
-            }
-            // Ortadakiler = referans noktası (yeşil, küçük)
-            else
-            {
-                Gizmos.color = Color.green;
-                Gizmos.DrawSphere(controlPoints[i], 0.25f);
-            }
+            bool isEndpoint = (i == 0 || i == controlPoints.Length - 1);
+            Gizmos.color = isEndpoint ? Color.red : Color.green;
+            Gizmos.DrawSphere(controlPoints[i], isEndpoint ? 0.4f : 0.25f);
 
-            // Kontrol poligonu çizgileri (yarı saydam beyaz)
+            // Control polygon lines
             if (i < controlPoints.Length - 1)
             {
                 Gizmos.color = new Color(1f, 1f, 1f, 0.3f);
@@ -384,9 +253,6 @@ public class BezierSpline : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Merkez eğriyi çizgi segmentleri olarak çizer.
-    /// </summary>
     private void DrawBezierGizmo(Vector3[] cp)
     {
         Vector3 prev = BezierMath.EvaluateCurve(cp, 0f);
@@ -399,12 +265,7 @@ public class BezierSpline : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Offset'lenmiş şerit eğrisini çizer.
-    /// Her noktada merkez eğriden normal yönde offset uygular.
-    /// Kontrol noktalarını offset'lemekten DAHA DOĞRU sonuç verir.
-    /// </summary>
-    private void DrawBezierGizmoOffset(float offset)
+    private void DrawOffsetGizmo(float offset)
     {
         Vector3 prev = BezierMath.GetOffsetPoint(controlPoints, 0f, offset);
         for (int i = 1; i <= curveResolution; i++)
